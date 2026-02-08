@@ -1,97 +1,242 @@
 package main
 
 import (
+	"encoding/xml"
 	"fmt"
-	"net"
+	"io"
+	"net/http"
 	"strings"
-	"time"
 )
 
-func searchSSDP(searchTarget string, mx int, timeout time.Duration) {
-	ssdpAddr := "239.255.255.250:1900"
+// デバイス記述XMLの構造
+type DeviceDescription struct {
+	XMLName xml.Name `xml:"root"`
+	Device  Device   `xml:"device"`
+}
 
-	searchRequest := fmt.Sprintf(
-		"M-SEARCH * HTTP/1.1\r\n"+
-			"HOST: %s\r\n"+
-			"MAN: \"ssdp:discover\"\r\n"+
-			"MX: %d\r\n"+
-			"ST: %s\r\n"+
-			"USER-AGENT: Go/1.0 SSDP-Discovery/1.0\r\n"+
-			"\r\n",
-		ssdpAddr,
-		mx,
-		searchTarget,
-	)
+type Device struct {
+	DeviceType   string        `xml:"deviceType"`
+	FriendlyName string        `xml:"friendlyName"`
+	Manufacturer string        `xml:"manufacturer"`
+	ModelName    string        `xml:"modelName"`
+	ServiceList  []Service     `xml:"serviceList>service"`
+}
 
-	fmt.Printf("検索対象: %s\n", searchTarget)
-	fmt.Printf("最大待機時間: %v\n", timeout)
-	fmt.Println(strings.Repeat("-", 60))
+type Service struct {
+	ServiceType string `xml:"serviceType"`
+	ServiceId   string `xml:"serviceId"`
+	ControlURL  string `xml:"controlURL"`
+	EventSubURL string `xml:"eventSubURL"`
+	SCPDURL     string `xml:"SCPDURL"`
+}
 
-	addr, err := net.ResolveUDPAddr("udp4", ssdpAddr)
+// DIDL-Lite (コンテンツディレクトリ応答) の構造
+type DIDLLite struct {
+	XMLName    xml.Name    `xml:"DIDL-Lite"`
+	Containers []Container `xml:"container"`
+	Items      []Item      `xml:"item"`
+}
+
+type Container struct {
+	ID         string `xml:"id,attr"`
+	ParentID   string `xml:"parentID,attr"`
+	Title      string `xml:"title"`
+	Class      string `xml:"class"`
+	ChildCount int    `xml:"childCount,attr"`
+}
+
+type Item struct {
+	ID       string   `xml:"id,attr"`
+	ParentID string   `xml:"parentID,attr"`
+	Title    string   `xml:"title"`
+	Class    string   `xml:"class"`
+	Date     string   `xml:"date"`
+	Res      []Resource `xml:"res"`
+}
+
+type Resource struct {
+	URL          string `xml:",chardata"`
+	ProtocolInfo string `xml:"protocolInfo,attr"`
+	Size         string `xml:"size,attr"`
+	Resolution   string `xml:"resolution,attr"`
+}
+
+func getDeviceDescription(url string) (*DeviceDescription, error) {
+	resp, err := http.Get(url)
 	if err != nil {
-		fmt.Printf("アドレス解決エラー: %v\n", err)
-		return
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
 	}
 
-	// UDPソケットを作成（特定のインターフェースにバインド）
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	var desc DeviceDescription
+	err = xml.Unmarshal(body, &desc)
 	if err != nil {
-		fmt.Printf("UDP接続エラー: %v\n", err)
-		return
-	}
-	defer conn.Close()
-
-	// タイムアウトの設定
-	conn.SetReadDeadline(time.Now().Add(timeout))
-
-	// リクエスト送信
-	n, err := conn.WriteToUDP([]byte(searchRequest), addr)
-	if err != nil {
-		fmt.Printf("送信エラー: %v\n", err)
-		return
+		return nil, err
 	}
 
-	fmt.Printf("✓ %d バイト送信完了\n", n)
-	fmt.Println("応答を待機中...\n")
+	return &desc, nil
+}
 
-	// 応答受信
-	buffer := make([]byte, 8192)
-	deviceCount := 0
+func browseContentDirectory(baseURL, controlURL, objectID string) (*DIDLLite, error) {
+	soapAction := "urn:schemas-upnp-org:service:ContentDirectory:1#Browse"
+	
+	soapBody := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body>
+    <u:Browse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">
+      <ObjectID>%s</ObjectID>
+      <BrowseFlag>BrowseDirectChildren</BrowseFlag>
+      <Filter>*</Filter>
+      <StartingIndex>0</StartingIndex>
+      <RequestedCount>100</RequestedCount>
+      <SortCriteria></SortCriteria>
+    </u:Browse>
+  </s:Body>
+</s:Envelope>`, objectID)
 
-	for {
-		n, remoteAddr, err := conn.ReadFromUDP(buffer)
-		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				if deviceCount == 0 {
-					fmt.Println("⚠ タイムアウト: 応答がありませんでした")
-				} else {
-					fmt.Printf("\n✓ 合計 %d 個のデバイスから応答を受信\n", deviceCount)
-				}
-				break
-			}
-			fmt.Printf("受信エラー: %v\n", err)
-			break
+	// controlURLが相対パスの場合、絶対URLに変換
+	fullURL := controlURL
+	if !strings.HasPrefix(controlURL, "http") {
+		fullURL = baseURL + controlURL
+	}
+
+	req, err := http.NewRequest("POST", fullURL, strings.NewReader(soapBody))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "text/xml; charset=utf-8")
+	req.Header.Set("SOAPAction", fmt.Sprintf(`"%s"`, soapAction))
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// SOAP応答からDIDL-Liteを抽出
+	bodyStr := string(body)
+	
+	// ResultタグからDIDL-Liteを抽出
+	startTag := "<Result>"
+	endTag := "</Result>"
+	startIdx := strings.Index(bodyStr, startTag)
+	endIdx := strings.Index(bodyStr, endTag)
+	
+	if startIdx == -1 || endIdx == -1 {
+		return nil, fmt.Errorf("DIDL-Lite not found in response")
+	}
+
+	didlStr := bodyStr[startIdx+len(startTag) : endIdx]
+	// XMLエスケープを解除
+	didlStr = strings.ReplaceAll(didlStr, "&lt;", "<")
+	didlStr = strings.ReplaceAll(didlStr, "&gt;", ">")
+	didlStr = strings.ReplaceAll(didlStr, "&quot;", "\"")
+	didlStr = strings.ReplaceAll(didlStr, "&amp;", "&")
+
+	var didl DIDLLite
+	err = xml.Unmarshal([]byte(didlStr), &didl)
+	if err != nil {
+		return nil, fmt.Errorf("XML parse error: %v\nDIDL: %s", err, didlStr)
+	}
+
+	return &didl, nil
+}
+
+func listImagesRecursive(baseURL, controlURL, objectID string, indent string) error {
+	didl, err := browseContentDirectory(baseURL, controlURL, objectID)
+	if err != nil {
+		return err
+	}
+
+	// コンテナ（フォルダ）を表示
+	for _, container := range didl.Containers {
+		fmt.Printf("%s📁 %s (ID: %s, 子要素: %d個)\n", 
+			indent, container.Title, container.ID, container.ChildCount)
+		
+		// 再帰的に子要素を取得
+		if container.ChildCount > 0 {
+			listImagesRecursive(baseURL, controlURL, container.ID, indent+"  ")
 		}
-
-		deviceCount++
-		response := string(buffer[:n])
-
-		fmt.Printf("【デバイス %d】 from %s\n", deviceCount, remoteAddr)
-		fmt.Println(strings.Repeat("=", 60))
-		fmt.Println(response)
-		fmt.Println()
 	}
+
+	// アイテム（画像）を表示
+	for _, item := range didl.Items {
+		if strings.Contains(item.Class, "image") {
+			fmt.Printf("%s🖼️  %s\n", indent, item.Title)
+			if item.Date != "" {
+				fmt.Printf("%s   日付: %s\n", indent, item.Date)
+			}
+			for _, res := range item.Res {
+				if res.Resolution != "" {
+					fmt.Printf("%s   解像度: %s\n", indent, res.Resolution)
+				}
+				if res.Size != "" {
+					fmt.Printf("%s   サイズ: %s bytes\n", indent, res.Size)
+				}
+				fmt.Printf("%s   URL: %s\n", indent, res.URL)
+			}
+			fmt.Println()
+		}
+	}
+
+	return nil
 }
 
 func main() {
-	// まず全デバイスを検索
-	fmt.Println("=== すべてのUPnPデバイスを検索 ===\n")
-	searchSSDP("ssdp:all", 3, 5*time.Second)
+	deviceURL := "http://10.0.0.1:64321/DmsDesc.xml"
+	
+	fmt.Println("=== デバイス情報取得中 ===\n")
+	
+	desc, err := getDeviceDescription(deviceURL)
+	if err != nil {
+		fmt.Printf("エラー: %v\n", err)
+		return
+	}
 
-	fmt.Println("\n" + strings.Repeat("=", 60))
+	fmt.Printf("デバイス名: %s\n", desc.Device.FriendlyName)
+	fmt.Printf("製造元: %s\n", desc.Device.Manufacturer)
+	fmt.Printf("モデル: %s\n", desc.Device.ModelName)
 	fmt.Println()
 
-	// 次にSony ScalarWebAPIを検索
-	fmt.Println("=== Sony ScalarWebAPI デバイスを検索 ===\n")
-	searchSSDP("urn:schemas-sony-com:service:ScalarWebAPI:1", 3, 5*time.Second)
+	// ContentDirectoryサービスを探す
+	var controlURL string
+	for _, service := range desc.Device.ServiceList {
+		if strings.Contains(service.ServiceType, "ContentDirectory") {
+			controlURL = service.ControlURL
+			fmt.Printf("ContentDirectory サービス検出: %s\n", service.ServiceType)
+			fmt.Printf("Control URL: %s\n", controlURL)
+			break
+		}
+	}
+
+	if controlURL == "" {
+		fmt.Println("ContentDirectoryサービスが見つかりません")
+		return
+	}
+
+	fmt.Println("\n=== 画像リスト取得中 ===\n")
+	
+	// ベースURL (http://10.0.0.1:64321)
+	baseURL := "http://10.0.0.1:64321"
+	
+	// ルートからブラウズ開始
+	err = listImagesRecursive(baseURL, controlURL, "0", "")
+	if err != nil {
+		fmt.Printf("エラー: %v\n", err)
+		return
+	}
+
+	fmt.Println("\n✓ 完了")
 }
