@@ -3,37 +3,38 @@ package main
 import (
 	"fmt"
 	"net"
+	"strings"
 	"time"
 )
 
-const (
-	ssdpAddr     = "239.255.255.250:1900"
-	ssdpSearchST = "urn:schemas-sony-com:service:ScalarWebAPI:1"
-)
+func searchSSDP(searchTarget string, mx int, timeout time.Duration) {
+	ssdpAddr := "239.255.255.250:1900"
 
-func main() {
-	// M-SEARCHリクエストの作成
 	searchRequest := fmt.Sprintf(
 		"M-SEARCH * HTTP/1.1\r\n"+
 			"HOST: %s\r\n"+
 			"MAN: \"ssdp:discover\"\r\n"+
-			"MX: 1\r\n"+
+			"MX: %d\r\n"+
 			"ST: %s\r\n"+
 			"USER-AGENT: Go/1.0 SSDP-Discovery/1.0\r\n"+
 			"\r\n",
 		ssdpAddr,
-		ssdpSearchST,
+		mx,
+		searchTarget,
 	)
 
-	// UDPアドレスの解決
+	fmt.Printf("検索対象: %s\n", searchTarget)
+	fmt.Printf("最大待機時間: %v\n", timeout)
+	fmt.Println(strings.Repeat("-", 60))
+
 	addr, err := net.ResolveUDPAddr("udp4", ssdpAddr)
 	if err != nil {
 		fmt.Printf("アドレス解決エラー: %v\n", err)
 		return
 	}
 
-	// UDP接続の作成
-	conn, err := net.ListenUDP("udp4", nil)
+	// UDPソケットを作成（特定のインターフェースにバインド）
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	if err != nil {
 		fmt.Printf("UDP接続エラー: %v\n", err)
 		return
@@ -41,34 +42,56 @@ func main() {
 	defer conn.Close()
 
 	// タイムアウトの設定
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(timeout))
 
-	// M-SEARCHリクエストの送信
-	_, err = conn.WriteToUDP([]byte(searchRequest), addr)
+	// リクエスト送信
+	n, err := conn.WriteToUDP([]byte(searchRequest), addr)
 	if err != nil {
 		fmt.Printf("送信エラー: %v\n", err)
 		return
 	}
 
-	fmt.Println("M-SEARCHリクエストを送信しました")
-	fmt.Println("応答を待機中...")
-	fmt.Println()
+	fmt.Printf("✓ %d バイト送信完了\n", n)
+	fmt.Println("応答を待機中...\n")
 
-	// 応答の受信
+	// 応答受信
 	buffer := make([]byte, 8192)
+	deviceCount := 0
+
 	for {
 		n, remoteAddr, err := conn.ReadFromUDP(buffer)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				fmt.Println("タイムアウト: 応答がありませんでした")
+				if deviceCount == 0 {
+					fmt.Println("⚠ タイムアウト: 応答がありませんでした")
+				} else {
+					fmt.Printf("\n✓ 合計 %d 個のデバイスから応答を受信\n", deviceCount)
+				}
 				break
 			}
 			fmt.Printf("受信エラー: %v\n", err)
 			break
 		}
 
-		fmt.Printf("=== 応答元: %s ===\n", remoteAddr)
-		fmt.Println(string(buffer[:n]))
+		deviceCount++
+		response := string(buffer[:n])
+
+		fmt.Printf("【デバイス %d】 from %s\n", deviceCount, remoteAddr)
+		fmt.Println(strings.Repeat("=", 60))
+		fmt.Println(response)
 		fmt.Println()
 	}
+}
+
+func main() {
+	// まず全デバイスを検索
+	fmt.Println("=== すべてのUPnPデバイスを検索 ===\n")
+	searchSSDP("ssdp:all", 3, 5*time.Second)
+
+	fmt.Println("\n" + strings.Repeat("=", 60))
+	fmt.Println()
+
+	// 次にSony ScalarWebAPIを検索
+	fmt.Println("=== Sony ScalarWebAPI デバイスを検索 ===\n")
+	searchSSDP("urn:schemas-sony-com:service:ScalarWebAPI:1", 3, 5*time.Second)
 }
