@@ -90,7 +90,7 @@ struct ContentView: View {
         }
       }
     }
-    .frame(minWidth: 500, minHeight: 600)
+    .frame(minWidth: 400, minHeight: 100)
     .onAppear { viewModel.loadImages() }
   }
 }
