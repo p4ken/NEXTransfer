@@ -93,7 +93,7 @@ struct ContentView: View {
                 }
             }
         }
-        .frame(minWidth: 500, minHeight: 600) // ウィンドウサイズ指定
+        .frame(minWidth: 500, minHeight: 600)
         .onAppear { viewModel.loadImages() }
     }
 }
