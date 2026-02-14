@@ -1,11 +1,12 @@
 override APP_NAME := NEXGallery
 override BUNDLE_DIR := $(APP_NAME).app
+override SOURCES = $(wildcard *.swift)
 
 all: clean build launch
 
 build: FORCE
 	mkdir -p "$(BUNDLE_DIR)/Contents/MacOS"
-	swiftc *.swift -o "$(BUNDLE_DIR)/Contents/MacOS/$(APP_NAME)"
+	swiftc $(SOURCES) -o "$(BUNDLE_DIR)/Contents/MacOS/$(APP_NAME)"
 	cp Info.plist "$(BUNDLE_DIR)/Contents/Info.plist"
 
 launch: FORCE
@@ -15,6 +16,6 @@ clean: FORCE
 	rm -rf "$(BUNDLE_DIR)"
 
 format: FORCE
-	swift format --in-place
+	swift format $(SOURCES) --in-place
 
 FORCE:
