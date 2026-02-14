@@ -1,6 +1,6 @@
 override BIN := P4Transfer
 override BUNDLE := $(BIN).app
-override SOURCES = $(wildcard *.swift)
+override SOURCES = $(wildcard src/*.swift)
 
 all: clean build launch
 
