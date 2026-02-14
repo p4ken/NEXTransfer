@@ -1,4 +1,4 @@
-# P4 Transfer
+# p4ken/NEXTransfer
 
 NEX-6 Wireless Transfer for Mac.
 
