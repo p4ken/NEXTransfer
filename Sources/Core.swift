@@ -81,7 +81,7 @@ struct ContentView: View {
           }
         }
       }
-      .navigationTitle("NEX Gallery")
+      .navigationTitle("NEX-6 Wireless Transfer")
       .toolbar {
         ToolbarItem(placement: .primaryAction) {
           Button(action: { viewModel.loadImages() }) {

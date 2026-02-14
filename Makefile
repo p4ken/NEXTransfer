@@ -1,6 +1,6 @@
-override BIN := P4Transfer
+override BIN := NEX-6 Wireless Transfer
 override BUNDLE := $(BIN).app
-override SOURCES = $(wildcard src/*.swift)
+override SOURCES = $(wildcard Sources/*.swift)
 
 all: clean build launch
 
