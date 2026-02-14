@@ -1,10 +1,6 @@
 import Foundation
 import SwiftUI
 
-#if canImport(FoundationNetworking)
-  import FoundationNetworking
-#endif
-
 // MARK: - Models
 struct DLNAImageItem: Identifiable, Hashable {
   let id: String

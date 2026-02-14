@@ -1,21 +1,21 @@
-override APP_NAME := NEXGallery
-override BUNDLE_DIR := $(APP_NAME).app
+override BIN := P4Transfer
+override BUNDLE := $(BIN).app
 override SOURCES = $(wildcard *.swift)
 
 all: clean build launch
 
 build: FORCE
-	mkdir -p "$(BUNDLE_DIR)/Contents/MacOS"
-	swiftc $(SOURCES) -o "$(BUNDLE_DIR)/Contents/MacOS/$(APP_NAME)"
-	cp Info.plist "$(BUNDLE_DIR)/Contents/Info.plist"
+	mkdir -p "$(BUNDLE)/Contents/MacOS" "$(BUNDLE)/Contents/Resources"
+	swiftc $(SOURCES) -o "$(BUNDLE)/Contents/MacOS/$(BIN)"
 
 launch: FORCE
-	open "$(BUNDLE_DIR)"
+	open "$(BUNDLE)"
 
 clean: FORCE
-	rm -rf "$(BUNDLE_DIR)"
+	rm -rf "$(BUNDLE)"
 
 format: FORCE
 	swift format $(SOURCES) --in-place
 
+.PHONY: FORCE
 FORCE:
