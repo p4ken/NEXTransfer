@@ -9,6 +9,7 @@ build: FORCE
 	swiftc $(SOURCES) -o "$(BUNDLE)/Contents/MacOS/$(BIN)"
 
 launch: FORCE
+	osascript -e 'quit app "$(BIN)"'
 	open "$(BUNDLE)"
 
 clean: FORCE
