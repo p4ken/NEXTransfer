@@ -5,8 +5,13 @@ override SOURCES = $(wildcard Sources/*.swift)
 all: clean build launch
 
 build: FORCE
-	mkdir -p "$(BUNDLE)/Contents/MacOS" "$(BUNDLE)/Contents/Resources"
+	mkdir -p "$(BUNDLE)/Contents/MacOS"
 	swiftc $(SOURCES) -o "$(BUNDLE)/Contents/MacOS/$(BIN)"
+
+icon: FORCE
+	iconutil --convert icns /Users/p4/Downloads/AppIcon.iconset
+	mkdir -p "$(BUNDLE)/Contents/Resources"
+	/usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$(BUNDLE)/Contents/Info.plist"
 
 launch: FORCE
 	osascript -e 'quit app "$(BIN)"'
