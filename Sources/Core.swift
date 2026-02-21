@@ -5,7 +5,10 @@ import SwiftUI
 struct DLNAImageItem: Identifiable, Hashable {
   let id: String
   let title: String
-  let url: URL
+  let lrgURL: URL?
+  let smURL: URL?
+  let tnURL: URL?
+  let orgURL: URL?
 }
 
 // MARK: - ViewModel
@@ -40,8 +43,6 @@ struct ContentView: View {
   let columns = [GridItem(.adaptive(minimum: 150), spacing: 10)]
 
   var body: some View {
-    // NavigationViewは非推奨になりつつあるのでNavigationStackを使用（macOS 13+）
-    // 古いmacOSの場合はNavigationViewに戻してください
     NavigationStack {
       VStack {
         if viewModel.isLoading {
@@ -61,7 +62,7 @@ struct ContentView: View {
           ScrollView {
             LazyVGrid(columns: columns, spacing: 10) {
               ForEach(viewModel.images) { item in
-                AsyncImage(url: item.url) { phase in
+                AsyncImage(url: item.smURL) { phase in
                   switch phase {
                   case .empty:
                     Color.gray.opacity(0.2)
@@ -236,7 +237,9 @@ class BrowseResponseParser: NSObject, XMLParserDelegate {
 class DIDLLiteParser: NSObject, XMLParserDelegate {
   private let parser: XMLParser
   private var items: [DLNAImageItem] = [], containerIDs: [String] = []
-  private var currentElement = "", currentID = "", currentResURL = "", isImage = false
+  private var currentElement = "", currentID = "", isImage = false
+  private var lrgURL: URL?, smURL: URL?, tnURL: URL?, orgURL: URL?
+  private var currentResURL = ""
 
   init(data: Data) {
     self.parser = XMLParser(data: data)
@@ -256,9 +259,11 @@ class DIDLLiteParser: NSObject, XMLParserDelegate {
     if e == "container", let id = a["id"] { containerIDs.append(id) }
     if e == "item" {
       currentID = a["id"] ?? UUID().uuidString
+      lrgURL = nil; smURL = nil; tnURL = nil; orgURL = nil
       currentResURL = ""
       isImage = false
     }
+    if e == "res" { currentResURL = "" }
   }
   func parser(_ p: XMLParser, foundCharacters s: String) {
     let str = s.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -271,8 +276,15 @@ class DIDLLiteParser: NSObject, XMLParserDelegate {
   func parser(
     _ p: XMLParser, didEndElement e: String, namespaceURI n: String?, qualifiedName q: String?
   ) {
-    if e == "item" && isImage, let url = URL(string: currentResURL) {
-      items.append(DLNAImageItem(id: currentID, title: "", url: url))
+    if e == "res", let url = URL(string: currentResURL) {
+      let path = url.path.uppercased()
+      if path.contains("/LRG_") { lrgURL = url }
+      else if path.contains("/SM_") { smURL = url }
+      else if path.contains("/TN_") { tnURL = url }
+      else { orgURL = url }
+    }
+    if e == "item" && isImage {
+      items.append(DLNAImageItem(id: currentID, title: "", lrgURL: lrgURL, smURL: smURL, tnURL: tnURL, orgURL: orgURL))
     }
   }
 }
