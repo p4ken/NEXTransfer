@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import AppKit
 
 // MARK: - Models
 struct DLNAImageItem: Identifiable, Hashable {
@@ -9,6 +10,52 @@ struct DLNAImageItem: Identifiable, Hashable {
   let smURL: URL?
   let tnURL: URL?
   let orgURL: URL?
+}
+
+// MARK: - Image Saver
+@MainActor
+class ImageSaver: ObservableObject {
+  @Published var isSaving = false
+  @Published var lastMessage: String?
+
+  func saveImage(item: DLNAImageItem) {
+    // orgURL → lrgURL → smURL の優先順位で保存
+    guard let sourceURL = item.orgURL ?? item.lrgURL ?? item.smURL else {
+      lastMessage = "保存できるURLがありません"
+      return
+    }
+
+    // ファイル名をURLから取得、なければデフォルト名
+    let suggestedName = sourceURL.lastPathComponent.isEmpty ? "image.jpg" : sourceURL.lastPathComponent
+
+    let panel = NSSavePanel()
+    panel.title = "画像を保存"
+    panel.nameFieldStringValue = suggestedName
+    panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+    panel.allowedContentTypes = [.jpeg, .png, .rawImage, .image]
+    panel.canCreateDirectories = true
+
+    guard panel.runModal() == .OK, let destURL = panel.url else { return }
+
+    isSaving = true
+    lastMessage = nil
+
+    Task {
+      do {
+        let (data, response) = try await URLSession.shared.data(from: sourceURL)
+        // HTTPレスポンスのMIMEタイプを確認
+        if let httpResponse = response as? HTTPURLResponse,
+           !(200...299).contains(httpResponse.statusCode) {
+          throw URLError(.badServerResponse)
+        }
+        try data.write(to: destURL, options: .atomic)
+        lastMessage = "✅ 保存しました: \(destURL.lastPathComponent)"
+      } catch {
+        lastMessage = "❌ 保存失敗: \(error.localizedDescription)"
+      }
+      isSaving = false
+    }
+  }
 }
 
 // MARK: - ViewModel
@@ -39,15 +86,38 @@ class DLNAViewModel: ObservableObject {
 // MARK: - View
 struct ContentView: View {
   @StateObject private var viewModel = DLNAViewModel()
+  @StateObject private var imageSaver = ImageSaver()
 
   let columns = [GridItem(.adaptive(minimum: 150), spacing: 10)]
 
   var body: some View {
     NavigationStack {
-      VStack {
+      VStack(spacing: 0) {
+        // 保存状態バナー
+        if imageSaver.isSaving {
+          HStack {
+            ProgressView()
+              .scaleEffect(0.7)
+            Text("保存中...")
+              .font(.caption)
+          }
+          .padding(.vertical, 6)
+          .padding(.horizontal, 12)
+          .background(Color.accentColor.opacity(0.15))
+          .frame(maxWidth: .infinity)
+        } else if let msg = imageSaver.lastMessage {
+          Text(msg)
+            .font(.caption)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 12)
+            .background(msg.hasPrefix("✅") ? Color.green.opacity(0.15) : Color.red.opacity(0.15))
+            .frame(maxWidth: .infinity)
+        }
+
         if viewModel.isLoading {
           ProgressView("カメラを探索中...")
             .padding()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let error = viewModel.errorMessage {
           VStack {
             Image(systemName: "exclamationmark.triangle.fill")
@@ -58,24 +128,14 @@ struct ContentView: View {
               .padding()
             Button("再試行") { viewModel.loadImages() }
           }
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
           ScrollView {
             LazyVGrid(columns: columns, spacing: 10) {
               ForEach(viewModel.images) { item in
-                AsyncImage(url: item.smURL) { phase in
-                  switch phase {
-                  case .empty:
-                    Color.gray.opacity(0.2)
-                  case .success(let image):
-                    image.resizable().aspectRatio(contentMode: .fit)
-                  case .failure:
-                    Color.red.opacity(0.2).overlay(Text("読込失敗").font(.caption))
-                  @unknown default:
-                    EmptyView()
-                  }
+                ImageThumbnailView(item: item, isSaving: imageSaver.isSaving) {
+                  imageSaver.saveImage(item: item)
                 }
-                .frame(height: 120)
-                .cornerRadius(8)
               }
             }
             .padding()
@@ -93,6 +153,64 @@ struct ContentView: View {
     }
     .frame(minWidth: 400, minHeight: 100)
     .onAppear { viewModel.loadImages() }
+  }
+}
+
+// MARK: - Thumbnail View
+struct ImageThumbnailView: View {
+  let item: DLNAImageItem
+  let isSaving: Bool
+  let onTap: () -> Void
+
+  @State private var isHovered = false
+
+  var body: some View {
+    ZStack(alignment: .bottom) {
+      AsyncImage(url: item.smURL) { phase in
+        switch phase {
+        case .empty:
+          Color.gray.opacity(0.2)
+        case .success(let image):
+          image.resizable().aspectRatio(contentMode: .fit)
+        case .failure:
+          Color.red.opacity(0.2)
+            .overlay(Text("読込失敗").font(.caption))
+        @unknown default:
+          EmptyView()
+        }
+      }
+      .frame(height: 120)
+
+      // ホバー時のオーバーレイ
+      if isHovered {
+        HStack(spacing: 4) {
+          Image(systemName: "arrow.down.circle.fill")
+          Text("保存")
+            .font(.caption2).bold()
+        }
+        .foregroundColor(.white)
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .background(Color.black.opacity(0.6))
+        .clipShape(Capsule())
+        .padding(.bottom, 6)
+        .transition(.opacity)
+      }
+    }
+    .cornerRadius(8)
+    .overlay(
+      RoundedRectangle(cornerRadius: 8)
+        .stroke(isHovered ? Color.accentColor : Color.clear, lineWidth: 2)
+    )
+    .scaleEffect(isHovered ? 1.02 : 1.0)
+    .animation(.easeOut(duration: 0.15), value: isHovered)
+    .onHover { isHovered = $0 }
+    .onTapGesture {
+      guard !isSaving else { return }
+      onTap()
+    }
+    .help("クリックしてオリジナル画質で保存")
+    .disabled(isSaving)
   }
 }
 
