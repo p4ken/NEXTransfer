@@ -70,11 +70,19 @@ class DLNAViewModel: ObservableObject {
   func loadImages() {
     isLoading = true
     errorMessage = nil
+    images = []
 
     Task {
       do {
-        let items = try await client.fetchImages()
-        self.images = items
+        for try await item in client.fetchImages() {
+          self.images.append(item)
+          // Hide the loading indicator as soon as the first image arrives
+          if self.isLoading { self.isLoading = false }
+        }
+        // Sort by DLNA objectID descending after stream completes (larger ID = newer photo)
+        self.images.sort {
+          (Int($0.id) ?? 0) > (Int($1.id) ?? 0)
+        }
       } catch {
         self.errorMessage = "Error: \(error.localizedDescription)\nPlease check your Wi-Fi connection."
       }
@@ -172,9 +180,9 @@ struct ImageThumbnailView: View {
           Color.gray.opacity(0.2)
         case .success(let image):
           image.resizable().aspectRatio(contentMode: .fit)
-          case .failure:
-            Color.red.opacity(0.2)
-              .overlay(Text("Load failed").font(.caption))
+        case .failure:
+          Color.red.opacity(0.2)
+            .overlay(Text("Load failed").font(.caption))
         @unknown default:
           EmptyView()
         }
@@ -218,15 +226,27 @@ struct ImageThumbnailView: View {
 class DLNAClient: NSObject {
   let baseURLString = "http://10.0.0.1:64321"
 
-  func fetchImages() async throws -> [DLNAImageItem] {
-    let controlPath = try await getControlURL()
-    let fullControlURL =
-      controlPath.hasPrefix("http")
-      ? URL(string: controlPath)! : URL(string: baseURLString + controlPath)!
-
-    var images: [DLNAImageItem] = []
-    try await browseRecursive(controlURL: fullControlURL, objectID: "0", images: &images)
-    return images
+  // Returns an AsyncThrowingStream so callers can display images as they arrive
+  func fetchImages() -> AsyncThrowingStream<DLNAImageItem, Error> {
+    AsyncThrowingStream { continuation in
+      Task {
+        do {
+          let controlPath = try await getControlURL()
+          let fullControlURL =
+            controlPath.hasPrefix("http")
+            ? URL(string: controlPath)!
+            : URL(string: baseURLString + controlPath)!
+          try await browseRecursive(
+            controlURL: fullControlURL,
+            objectID: "0",
+            continuation: continuation
+          )
+          continuation.finish()
+        } catch {
+          continuation.finish(throwing: error)
+        }
+      }
+    }
   }
 
   private func getControlURL() async throws -> String {
@@ -242,9 +262,13 @@ class DLNAClient: NSObject {
     }
   }
 
-  private func browseRecursive(controlURL: URL, objectID: String, images: inout [DLNAImageItem])
-    async throws
-  {
+  // Yields each discovered image item immediately; directories are traversed sequentially
+  // (no parallelism) to avoid overloading the camera's limited processing capacity.
+  private func browseRecursive(
+    controlURL: URL,
+    objectID: String,
+    continuation: AsyncThrowingStream<DLNAImageItem, Error>.Continuation
+  ) async throws {
     let soapBody = """
       <?xml version="1.0" encoding="utf-8"?>
       <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
@@ -273,10 +297,18 @@ class DLNAClient: NSObject {
     let parser = BrowseResponseParser(data: data)
     let result = parser.parse()
 
-    images.append(contentsOf: result.items)
+    // Yield discovered images immediately so the UI can render them right away
+    for item in result.items {
+      continuation.yield(item)
+    }
 
+    // Recurse into subdirectories one at a time (sequential, no parallelism)
     for containerID in result.containerIDs {
-      try await browseRecursive(controlURL: controlURL, objectID: containerID, images: &images)
+      try await browseRecursive(
+        controlURL: controlURL,
+        objectID: containerID,
+        continuation: continuation
+      )
     }
   }
 }
@@ -402,7 +434,9 @@ class DIDLLiteParser: NSObject, XMLParserDelegate {
       else { orgURL = url }
     }
     if e == "item" && isImage {
-      items.append(DLNAImageItem(id: currentID, title: "", lrgURL: lrgURL, smURL: smURL, tnURL: tnURL, orgURL: orgURL))
+      items.append(
+        DLNAImageItem(
+          id: currentID, title: "", lrgURL: lrgURL, smURL: smURL, tnURL: tnURL, orgURL: orgURL))
     }
   }
 }
