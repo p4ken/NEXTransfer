@@ -63,30 +63,58 @@ class ImageSaver: ObservableObject {
 class DLNAViewModel: ObservableObject {
   @Published var images: [DLNAImageItem] = []
   @Published var isLoading = false
+  @Published var statusMessage: String?   // replaces errorMessage for both info and errors
   @Published var errorMessage: String?
 
   private let client = DLNAClient()
+  private var loadTask: Task<Void, Never>?
 
   func loadImages() {
+    // Cancel any in-flight load (e.g. user pressed Retry while retrying)
+    loadTask?.cancel()
     isLoading = true
     errorMessage = nil
+    statusMessage = nil
     images = []
 
-    Task {
+    loadTask = Task {
+      await runLoadLoop()
+    }
+  }
+
+  private func runLoadLoop() async {
+    while !Task.isCancelled {
       do {
         for try await item in client.fetchImages() {
+          guard !Task.isCancelled else { break }
           self.images.append(item)
-          // Hide the loading indicator as soon as the first image arrives
-          if self.isLoading { self.isLoading = false }
+          // Hide the loading spinner as soon as the first image arrives
+          if self.isLoading {
+            self.isLoading = false
+            self.statusMessage = nil
+          }
         }
+        guard !Task.isCancelled else { break }
         // Sort by DLNA objectID descending after stream completes (larger ID = newer photo)
-        self.images.sort {
-          (Int($0.id) ?? 0) > (Int($1.id) ?? 0)
-        }
+        self.images.sort { (Int($0.id) ?? 0) > (Int($1.id) ?? 0) }
+        self.isLoading = false
+        return
+
+      } catch let error as NSError where error.code == NSURLErrorNotConnectedToInternet
+                                      || error.code == NSURLErrorNetworkConnectionLost
+                                      || error.code == NSURLErrorCannotConnectToHost {
+        // The OS sees the camera network as "no internet" right after switching Wi-Fi.
+        // Clear any stale images and wait briefly before retrying.
+        self.images = []
+        self.isLoading = true
+        self.statusMessage = "Waiting for camera network…"
+        try? await Task.sleep(for: .seconds(2))
+
       } catch {
         self.errorMessage = "Error: \(error.localizedDescription)\nPlease check your Wi-Fi connection."
+        self.isLoading = false
+        return
       }
-      self.isLoading = false
     }
   }
 }
@@ -123,7 +151,7 @@ struct ContentView: View {
         }
 
         if viewModel.isLoading {
-          ProgressView("Searching for camera...")
+          ProgressView(viewModel.statusMessage ?? "Searching for camera...")
             .padding()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let error = viewModel.errorMessage {
@@ -226,6 +254,14 @@ struct ImageThumbnailView: View {
 class DLNAClient: NSObject {
   let baseURLString = "http://10.0.0.1:64321"
 
+  // Custom session with no timeout — waits indefinitely for the camera to respond
+  private let session: URLSession = {
+    let config = URLSessionConfiguration.default
+    config.timeoutIntervalForRequest  = .infinity
+    config.timeoutIntervalForResource = .infinity
+    return URLSession(configuration: config)
+  }()
+
   // Returns an AsyncThrowingStream so callers can display images as they arrive
   func fetchImages() -> AsyncThrowingStream<DLNAImageItem, Error> {
     AsyncThrowingStream { continuation in
@@ -251,7 +287,7 @@ class DLNAClient: NSObject {
 
   private func getControlURL() async throws -> String {
     guard let url = URL(string: "\(baseURLString)/DmsDesc.xml") else { throw URLError(.badURL) }
-    let (data, _) = try await URLSession.shared.data(from: url)
+    let (data, _) = try await session.data(from: url)
     let parser = DeviceDescriptionParser(data: data)
     if let controlURL = parser.parse() {
       return controlURL
@@ -293,7 +329,7 @@ class DLNAClient: NSObject {
       "\"urn:schemas-upnp-org:service:ContentDirectory:1#Browse\"", forHTTPHeaderField: "SOAPAction"
     )
 
-    let (data, _) = try await URLSession.shared.data(for: request)
+    let (data, _) = try await session.data(for: request)
     let parser = BrowseResponseParser(data: data)
     let result = parser.parse()
 
