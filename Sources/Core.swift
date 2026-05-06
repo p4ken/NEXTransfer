@@ -19,17 +19,17 @@ class ImageSaver: ObservableObject {
   @Published var lastMessage: String?
 
   func saveImage(item: DLNAImageItem) {
-    // orgURL → lrgURL → smURL の優先順位で保存
+    // Prefer saving from orgURL -> lrgURL -> smURL in that order
     guard let sourceURL = item.orgURL ?? item.lrgURL ?? item.smURL else {
-      lastMessage = "保存できるURLがありません"
+      lastMessage = "No URL available to save"
       return
     }
 
-    // ファイル名をURLから取得、なければデフォルト名
+    // Extract filename from the URL; use a default if missing
     let suggestedName = sourceURL.lastPathComponent.isEmpty ? "image.jpg" : sourceURL.lastPathComponent
 
     let panel = NSSavePanel()
-    panel.title = "画像を保存"
+    panel.title = "Save Image"
     panel.nameFieldStringValue = suggestedName
     panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
     panel.allowedContentTypes = [.jpeg, .png, .rawImage, .image]
@@ -43,15 +43,15 @@ class ImageSaver: ObservableObject {
     Task {
       do {
         let (data, response) = try await URLSession.shared.data(from: sourceURL)
-        // HTTPレスポンスのMIMEタイプを確認
+        // Check HTTP response status code
         if let httpResponse = response as? HTTPURLResponse,
            !(200...299).contains(httpResponse.statusCode) {
           throw URLError(.badServerResponse)
         }
         try data.write(to: destURL, options: .atomic)
-        lastMessage = "✅ 保存しました: \(destURL.lastPathComponent)"
+        lastMessage = "✅ Saved: \(destURL.lastPathComponent)"
       } catch {
-        lastMessage = "❌ 保存失敗: \(error.localizedDescription)"
+        lastMessage = "❌ Save failed: \(error.localizedDescription)"
       }
       isSaving = false
     }
@@ -76,7 +76,7 @@ class DLNAViewModel: ObservableObject {
         let items = try await client.fetchImages()
         self.images = items
       } catch {
-        self.errorMessage = "エラー: \(error.localizedDescription)\nWi-Fi接続を確認してください。"
+        self.errorMessage = "Error: \(error.localizedDescription)\nPlease check your Wi-Fi connection."
       }
       self.isLoading = false
     }
@@ -93,12 +93,12 @@ struct ContentView: View {
   var body: some View {
     NavigationStack {
       VStack(spacing: 0) {
-        // 保存状態バナー
+        // Save status banner
         if imageSaver.isSaving {
           HStack {
             ProgressView()
               .scaleEffect(0.7)
-            Text("保存中...")
+            Text("Saving...")
               .font(.caption)
           }
           .padding(.vertical, 6)
@@ -115,7 +115,7 @@ struct ContentView: View {
         }
 
         if viewModel.isLoading {
-          ProgressView("カメラを探索中...")
+          ProgressView("Searching for camera...")
             .padding()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let error = viewModel.errorMessage {
@@ -126,7 +126,7 @@ struct ContentView: View {
             Text(error)
               .multilineTextAlignment(.center)
               .padding()
-            Button("再試行") { viewModel.loadImages() }
+            Button("Retry") { viewModel.loadImages() }
           }
           .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -172,20 +172,20 @@ struct ImageThumbnailView: View {
           Color.gray.opacity(0.2)
         case .success(let image):
           image.resizable().aspectRatio(contentMode: .fit)
-        case .failure:
-          Color.red.opacity(0.2)
-            .overlay(Text("読込失敗").font(.caption))
+          case .failure:
+            Color.red.opacity(0.2)
+              .overlay(Text("Load failed").font(.caption))
         @unknown default:
           EmptyView()
         }
       }
       .frame(height: 120)
 
-      // ホバー時のオーバーレイ
+      // Hover overlay
       if isHovered {
         HStack(spacing: 4) {
           Image(systemName: "arrow.down.circle.fill")
-          Text("保存")
+          Text("Save")
             .font(.caption2).bold()
         }
         .foregroundColor(.white)
@@ -209,7 +209,7 @@ struct ImageThumbnailView: View {
       guard !isSaving else { return }
       onTap()
     }
-    .help("クリックしてオリジナル画質で保存")
+    .help("Click to save original-quality image")
     .disabled(isSaving)
   }
 }
