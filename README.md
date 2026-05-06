@@ -1,5 +1,7 @@
 # p4ken/NEXTransfer
 
+![Screenshot](doc/ss.jpg)
+
 NEX-6 Wireless Transfer for Mac.
 
 This project is not affiliated with Sony.
