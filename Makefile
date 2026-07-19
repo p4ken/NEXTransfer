@@ -20,6 +20,9 @@ launch: FORCE
 clean: FORCE
 	rm -rf "$(BUNDLE)"
 
+install: FORCE
+	cp -r "$(BUNDLE)" /Applications/
+
 format: FORCE
 	swift format $(SOURCES) --in-place
 
